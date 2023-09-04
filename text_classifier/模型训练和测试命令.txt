@@ -1,0 +1,14 @@
+模型训练：
+python train.py --dataset_dir "data" --device "gpu" --max_seq_length 128 --model_name "ernie-3.0-base-zh" --batch_size 8 --early_stop --epochs 30 --seed 50 --early_stop_nums 8 --learning_rate 1e-5 --weight_decay 0.5
+
+
+
+模型测试：
+python analysis/evaluate.py --device "gpu" --max_seq_length 128 --batch_size 16 --bad_case_file "bad_case.txt" --dataset_dir "data" --params_path "./checkpoint" --dev_file "dev.txt"
+
+模型预测：
+python predict.py --device "gpu" --max_seq_length 128 --batch_size 16 --dataset_dir "data"
+
+
+数据增强，生成更多的训练样本
+python ./analysis/aug.py --create_n 2 --aug_percent 0.1 --aug_type mlm --aug_strategy substitute --device gpu --train_path ./data/train.txt --aug_path ./data/aug.txt

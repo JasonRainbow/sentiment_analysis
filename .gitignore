@@ -1,0 +1,8 @@
+# Default ignored files
+.idea
+__pycache__
+data
+chinese_wwm_ext_pytorch
+model
+checkpoint
+.ipynb_checkpoints
