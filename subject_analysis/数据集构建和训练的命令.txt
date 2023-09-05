@@ -1,0 +1,8 @@
+样本构建：属性抽取相关任务：
+python label_studio.py --label_studio_file ./data/label_studio.json --task_type ext --save_dir ./data --splits 0.8 0.1 0.1 --options "积极" "消极" "中立" --negative_ratio 0 --is_shuffle True --seed 6666
+
+模型训练：
+python -u -m paddle.distributed.launch --gpus "0" finetune.py --train_path ./data/train.json --dev_path ./data/dev.json --save_dir ./checkpoint --learning_rate 1e-5 --batch_size 8 --max_seq_len 256 --num_epochs 4 --model uie-senta-base --seed 6666 --logging_steps 10 --valid_steps 500 --device gpu
+
+模型测试：
+python evaluate.py --model_path ./checkpoint/model_best --test_path ./data/test.json --batch_size 8 --max_seq_len 256
