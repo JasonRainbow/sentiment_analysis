@@ -1,5 +1,5 @@
 import pymysql
-from pymysql.err import ProgrammingError
+from pymysql.err import ProgrammingError, MySQLError
 from sql_dao import host, port, username, password, database, charset
 
 
@@ -52,6 +52,15 @@ query_sql = """
 # df = pd.read_sql(query_sql, con=conn)
 # print(df)
 
+delete_subject_sql = """
+    delete from subject_analysis where workId = {} and subject = "{}";
+"""
+
+insert_subject_sql = """
+    insert into subject_analysis(workId, subject, positive, negative, neutrality) 
+    values({}, "{}", {}, {}, {});
+"""
+
 
 def insert_polarity(workId, country, platform, post_time, positive, negative, neutrality, conn):
     cursor = conn.cursor()
@@ -98,5 +107,26 @@ def insert_sentiment(workId, country, platform, post_time, happy, amazed, neutra
         cursor.close()
 
 
+def insert_subject(workId, subject, positive, negative, neutrality, conn):
+    if subject == '其他':
+        return
+    if positive == 0 and negative == 0 and neutrality == 0:  # 全是0，不插入
+        return
+    cursor = conn.cursor()
+    try:
+        cursor.execute(delete_subject_sql.format(workId, subject))  # 先把原来相同的记录删除
+        cursor.execute(insert_subject_sql.format(workId, subject, positive, negative, neutrality))
+        conn.commit()  # 提交事务
+    except ProgrammingError:
+        print("sql语法错误")
+    except MySQLError:
+        print('sql执行错误')
+        conn.rollback()
+    finally:
+        cursor.close()
+
+
 if __name__ == "__main__":
+    # conn = get_conn()
+    # insert_subject(8, '故事情节', 120, 70, 20, conn)
     pass
