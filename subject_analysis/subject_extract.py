@@ -97,6 +97,7 @@ def predict_classify(sentence):
 
 
 def batch_extract(workId, task_path='./checkpoint/model_best'):
+    print("workId：%d，开始进行主题情感分析" % workId)
     # 获取数据库连接
     conn = get_conn()
     query_work_sql = "select category from monitor_work where id = {};"
@@ -167,7 +168,7 @@ def batch_extract(workId, task_path='./checkpoint/model_best'):
                     continue
                 stats_res[subject][polarity_map[polarity]] += 1
     # print(stats_res)
-    if category == "书籍":
+    if category == "文学":
         del stats_res["演员演技"]
         del stats_res["影视特效"]
     for key in stats_res:
@@ -178,6 +179,7 @@ def batch_extract(workId, task_path='./checkpoint/model_best'):
     conn.close()  # 关闭数据库连接
     del conn
     del senta
+    print("workId：%d，完成主题情感分析" % workId)
     return True
 
 

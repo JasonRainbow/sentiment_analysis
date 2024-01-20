@@ -43,7 +43,7 @@ def load_model():
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     MODEL = MODEL.to(DEVICE)
     MODEL.load_state_dict(torch.load(PATH))
-    print('模型加载完毕')
+    # print('模型加载完毕')
     return TOKENIZER, MODEL, DEVICE
 
 
@@ -67,6 +67,7 @@ def predict_single_sentence(sentence, TOKENIZER, MODEL, DEVICE):
 
 
 def sentiment_analyze_by_workId(workId):
+    print("workId：%d ，开始进行细腻情感分析" % workId)
     TOKENIZER, MODEL, DEVICE = load_model()
     conn = get_conn()
     sql1 = "select distinct country, platform, postTime from raw_comment where workId = %d" % workId
@@ -78,6 +79,7 @@ def sentiment_analyze_by_workId(workId):
     conn.close()
     del TOKENIZER, MODEL, DEVICE, conn
     gc.collect()
+    print("workId：%d ，完成细腻情感分析" % workId)
     return True
 
 
