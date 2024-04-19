@@ -3,9 +3,14 @@ from transformers import BertTokenizer
 from torch.utils.data import *
 import torch
 import numpy as np
+from SixSentiment.model import pretrained_model_path
 
-SEQ_LENGTH = 128
-BATCH_SIZE = 8
+# 最大序列长度
+SEQ_LENGTH = 200
+# 批大小
+BATCH_SIZE = 16
+# 验证集所占比率
+valid_rate = 0.1
 # LABEL_DICT = {'negative': 0, 'positive': 1}  # 标签映射表
 
 
@@ -32,8 +37,9 @@ def convert_text_to_token(tokenizer, sentence, seq_length):
 
 # 构造训练集和测试集的DataLoader
 def genDataLoader(is_train):
+    torch.manual_seed(1)
     # 模型[roberta-wwm-ext]所在的目录名称
-    TOKENIZER = BertTokenizer.from_pretrained("../chinese_wwm_ext_pytorch")
+    TOKENIZER = BertTokenizer.from_pretrained(pretrained_model_path)
     TRAIN_DATA_PATH = '../data/three_sentiment_train.csv'  # 训练数据集
     TEST_DATA_PATH = '../data/three_sentiment_test.csv'  # 测试数据集
     if is_train:  # 构造训练集
@@ -57,7 +63,7 @@ def genDataLoader(is_train):
         types_pool.append(cur_type)
         masks_pool.append(cur_mask)
         cur_target = record['label']
-        target_pool.append([cur_target])
+        target_pool.append(cur_target)
         count += 1
         if count % 1000 == 0:
             print('已处理{}条'.format(count))
@@ -68,6 +74,57 @@ def genDataLoader(is_train):
                              torch.LongTensor(np.array(masks_pool)),
                              torch.LongTensor(np.array(target_pool)))
     # print('shit')
-    sampler = RandomSampler(data_gen)  # 全部采样并打乱顺序，返回下标
-    loader = DataLoader(data_gen, sampler=sampler, batch_size=BATCH_SIZE)
-    return loader
+    if is_train:
+        data_size = len(data_gen)
+        valid_size = int(data_size * valid_rate)
+        train_size = data_size - valid_size
+        train_set, valid_set = random_split(data_gen, [train_size, valid_size])
+        train_loader = DataLoader(train_set, batch_size=BATCH_SIZE, shuffle=True)
+        valid_loader = DataLoader(valid_set, batch_size=BATCH_SIZE, shuffle=False)
+
+        return train_loader, valid_loader
+    else:
+        loader = DataLoader(data_gen, batch_size=BATCH_SIZE)
+        return loader
+
+
+# 推理数据集
+class EvalCommentDataset(Dataset):
+    def __init__(self, input_ids, token_type_ids, attention_mask):
+        self.input_ids = input_ids
+        self.token_type_ids = token_type_ids
+        self.attention_mask = attention_mask
+
+    def __getitem__(self, idx):
+
+        return {
+            "input_ids": torch.tensor(self.input_ids[idx]),
+            "token_type_ids": torch.tensor(self.token_type_ids[idx]),
+            "attention_mask": torch.tensor(self.attention_mask[idx])
+            }
+
+    def __len__(self):
+        return len(self.input_ids)
+
+
+def genDataLoaderFromList(data):
+    # 获取分词器
+    TOKENIZER = BertTokenizer.from_pretrained(pretrained_model_path)
+    ids_pool = []
+    types_pool = []
+    masks_pool = []
+    # 对序列进行编码
+    for item in data:
+        cur_ids, cur_type, cur_mask = convert_text_to_token(TOKENIZER, item, seq_length=SEQ_LENGTH)
+        ids_pool.append(cur_ids)
+        types_pool.append(cur_type)
+        masks_pool.append(cur_mask)
+
+    dataset = EvalCommentDataset(ids_pool, types_pool, masks_pool)
+
+    return DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=False)
+
+
+if __name__ == "__main__":
+    df = pd.read_csv("../data/three_sentiment_train.csv", sep="\t")
+    print(df)

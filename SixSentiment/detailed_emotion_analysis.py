@@ -1,32 +1,14 @@
 import gc
 
-from ThreeSentiment.build_data import convert_text_to_token
+from SixSentiment.build_data import convert_text_to_token
+from SixSentiment.model import Model, pretrained_model_path
 import torch
-from transformers import BertTokenizer, BertModel
-import torch.nn as nn
+from transformers import BertTokenizer
 import numpy as np
 import pandas as pd
 from sql_dao.sql_utils import get_conn, insert_sentiment, query_sentiment_sql, delete_sentiment_sql
 from pymysql.err import ProgrammingError, MySQLError
 import os
-
-
-# 复用模型结构
-class Model(nn.Module):
-    def __init__(self, num_classes):
-        super(Model, self).__init__()
-        self.bert = BertModel.from_pretrained(parent_dir + '/chinese_wwm_ext_pytorch')  # /roberta-wwm-ext pretrain/
-        for param in self.bert.parameters():
-            param.requires_grad = True  # 所有参数求梯度
-        self.fc = nn.Linear(768, num_classes)  # 768 -> 6
-
-    def forward(self, x, token_type_ids, attention_mask):
-        context = x  # 输入的句子
-        types = token_type_ids
-        mask = attention_mask  # 对padding部分进行mask，和句子相同size，padding部分用0表示，如：[1, 1, 1, 1, 0, 0]
-        _, pooled = self.bert(context, token_type_ids=types, attention_mask=mask)
-        out = self.fc(pooled)  # 得到6分类概率
-        return out
 
 
 LABEL_DICT = {0: '恐惧', 1: '中立', 2: '伤心', 3: '惊讶', 4: '愤怒', 5: '开心'}  # 标签映射表
@@ -37,12 +19,13 @@ parent_dir = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file
 
 def load_model():
     PATH = parent_dir + '/model/roberta_model.pth'
-    TOKENIZER = BertTokenizer.from_pretrained(parent_dir + "/chinese_wwm_ext_pytorch")  # 模型[roberta-wwm-ext]所在的目录名称
+    TOKENIZER = BertTokenizer.from_pretrained(pretrained_model_path)  # 模型[roberta-wwm-ext]所在的目录名称
     # 加载模型
     MODEL = Model(num_classes=6)
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     MODEL = MODEL.to(DEVICE)
-    MODEL.load_state_dict(torch.load(PATH))
+    MODEL.load_state_dict(torch.load(PATH, map_location=DEVICE), False)
+    MODEL.eval()
     # print('模型加载完毕')
     return TOKENIZER, MODEL, DEVICE
 
@@ -62,7 +45,7 @@ def predict_single_sentence(sentence, TOKENIZER, MODEL, DEVICE):
     with torch.no_grad():
         y_ = MODEL(cur_ids, token_type_ids=cur_type, attention_mask=cur_mask)
         pred = y_.max(-1, keepdim=True)[1]  # 取最大值
-        cur_pre = LABEL_DICT[int(pred[0][0].cuda().data.cpu().numpy())]  # 预测的情绪
+        cur_pre = LABEL_DICT[int(pred[0][0].data.cpu().numpy())]  # 预测的情绪
     return cur_pre
 
 
@@ -133,10 +116,11 @@ def sentiment_analyze(workId, country, platform, post_time, TOKENIZER, MODEL, DE
 
 def my_test():
     TOKENIZER, MODEL, DEVICE = load_model()
-    print(predict_single_sentence("不错", TOKENIZER, MODEL, DEVICE))
+    print(predict_single_sentence("我喜欢这部电影", TOKENIZER, MODEL, DEVICE))
 
 
 if __name__ == '__main__':
     my_test()
+    # print(load_model()[1].eval())
     # sentiment_analyze_by_workId(19)  # 六分类情感分析
     pass

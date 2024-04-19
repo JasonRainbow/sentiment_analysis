@@ -9,7 +9,7 @@ import paddle.nn.functional as F
 from paddle.io import BatchSampler, DataLoader
 from text_classifier.utils import preprocess_function
 import pandas as pd
-from sql_dao.sql_utils import get_conn, insert_subject
+from sql_dao.sql_utils import get_conn, insert_subject, insert_comment_subject
 import warnings
 import logging
 
@@ -32,16 +32,19 @@ def extract_prop_and_op(text, predict):
     prop_op_lst = []
     for res in results:
         prop = res['text']
+        if prop is None or prop.strip() == "":
+            continue
         polarity = "中立"
         if res.get('relations') is not None:
-            if res.get('relations').get('观点词') is not None:
-                relations = res['relations']['观点词']
-                for (idx, relation) in enumerate(relations):
-                    if idx == 0:
-                        prop += ': '
-                    else:
-                        prop += ';'
-                    prop += relation['text']
+            relations = res.get('relations').get('观点词')
+            if relations is None or len(relations) < 1:
+                continue
+            for (idx, relation) in enumerate(relations):
+                if idx == 0:
+                    prop += ': '
+                else:
+                    prop += ';'
+                prop += relation['text']
             if res.get('relations').get('情感倾向[积极,消极,中立]') is not None:
                 polarity = res.get('relations').get('情感倾向[积极,消极,中立]')[0].get('text')
 
@@ -154,8 +157,9 @@ def batch_extract(workId, task_path='./checkpoint/model_best'):
     }
     query_sql = "select id,workId,translated from raw_comment where workId = {}"
     comments = pd.read_sql(query_sql.format(workId), con=conn)
-    for comment in comments['translated']:
-        props = extract_prop_and_op(comment, senta)
+    for i in range(len(comments)):
+        comment = comments.loc[i, :]
+        props = extract_prop_and_op(comment['translated'], senta)
         for prop in props:
             polarity = prop[1]
             if not polarity:  # 如果预测的情感为空，那设置为”中立“
@@ -163,10 +167,21 @@ def batch_extract(workId, task_path='./checkpoint/model_best'):
             # print(polarity)
             subjects = predict_classify(prop[0])[0].split(",")
             # print(subjects)
+            tmp = prop[0].split(": ")
+            if len(tmp) < 2:
+                continue
+            comment_subjects = []
             for subject in subjects:
-                if subject == '':
+                if subject == '' or subject == '其他':
                     continue
+                comment_subjects.append(subject)
+                # print(prop[0])
                 stats_res[subject][polarity_map[polarity]] += 1
+            if len(comment_subjects) == 0:
+                continue
+
+            insert_comment_subject(comment["id"], comment["workId"],
+                                   tmp[0], tmp[1], polarity, "|".join(comment_subjects), conn)
     # print(stats_res)
     if category == "文学":
         del stats_res["演员演技"]
@@ -194,7 +209,7 @@ def my_test():
 
 
 if __name__ == "__main__":
-    batch_extract(8)
+    batch_extract(226)
     # res = predict_classify("特效: 非常好")
     # print(res)
     # my_test()

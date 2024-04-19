@@ -4,8 +4,8 @@ from torch.utils.data import *
 import torch
 import numpy as np
 
-SEQ_LENGTH = 128
-BATCH_SIZE = 8
+SEQ_LENGTH = 200
+BATCH_SIZE = 16
 LABEL_DICT = {'fear': 0, 'neutral': 1, 'sad': 2, 'surprise': 3, 'angry': 4, 'happy': 5}  # 标签映射表
 
 
@@ -54,7 +54,7 @@ def genDataLoader(is_train):
         types_pool.append(cur_type)
         masks_pool.append(cur_mask)
         cur_target = LABEL_DICT[each['label']]
-        target_pool.append([cur_target])
+        target_pool.append(cur_target)
         count += 1
         if count % 1000 == 0:
             print('已处理{}条'.format(count))

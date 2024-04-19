@@ -1,38 +1,22 @@
-from ThreeSentiment.build_data import convert_text_to_token
+import time
+
+from ThreeSentiment.build_data import genDataLoader, genDataLoaderFromList
 import torch
-from transformers import BertTokenizer, BertModel
-import torch.nn as nn
-import numpy as np
+from tqdm import tqdm
+from transformers import BertTokenizer
 import pandas as pd
 from sklearn import metrics
 import os
 import gc
 from sql_dao.sql_utils import get_conn, query_polarity_sql, delete_polarity_sql, insert_polarity
 from pymysql.err import ProgrammingError, MySQLError
-
-
-# 复用模型结构
-class Model(nn.Module):
-    def __init__(self, num_classes):
-        super(Model, self).__init__()
-        self.bert = BertModel.from_pretrained(parent_dir + '/chinese_wwm_ext_pytorch')  # /roberta-wwm-ext pretrain/
-        for param in self.bert.parameters():
-            param.requires_grad = True  # 所有参数求梯度
-        self.fc = nn.Linear(768, num_classes)  # 768 -> 6
-
-    def forward(self, x, token_type_ids, attention_mask):
-        context = x  # 输入的句子
-        types = token_type_ids
-        mask = attention_mask  # 对padding部分进行mask，和句子相同size，padding部分用0表示，如：[1, 1, 1, 1, 0, 0]
-        _, pooled = self.bert(context, token_type_ids=types, attention_mask=mask)
-        out = self.fc(pooled)  # 得到2分类概率
-        return out
+from ThreeSentiment.model import Model
 
 
 LABEL_DICT = {0: '消极', 1: '中立', 2: '积极'}  # 标签映射表
 SEQ_LENGTH = 128
 
-parent_dir = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))  # 父目录
+parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))  # 父目录
 
 
 def load_model():
@@ -40,68 +24,67 @@ def load_model():
     TOKENIZER = BertTokenizer.from_pretrained(parent_dir + "/chinese_wwm_ext_pytorch")  # 模型[roberta-wwm-ext]所在的目录名称
     # 加载模型
     MODEL = Model(num_classes=3)
-    DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    DEVICE = torch.device("cpu")
+    # DEVICE = torch.device("cpu")
     MODEL = MODEL.to(DEVICE)
-    MODEL.load_state_dict(torch.load(PATH))
+    MODEL.eval()
+    MODEL.load_state_dict(torch.load(PATH, map_location=DEVICE), False)
     # print('模型加载完毕')
     return TOKENIZER, MODEL, DEVICE
 
 
-#  对单个句子进行情感分析 返回情感极性结果
-def predictSingle(sentence, TOKENIZER, MODEL, DEVICE):
-    ids = []
-    types = []
-    masks = []
-    cur_ids, cur_type, cur_mask = convert_text_to_token(TOKENIZER, sentence, seq_length=SEQ_LENGTH)
-    # print(cur_ids, cur_type, cur_mask)
-    ids.append(cur_ids)
-    types.append(cur_type)
-    masks.append(cur_mask)
-    cur_ids, cur_type, cur_mask = torch.LongTensor(np.array(ids)).to(DEVICE), torch.LongTensor(np.array(types)).to(
-        DEVICE), torch.LongTensor(np.array(masks)).to(DEVICE)  # 数据构造成tensor形式
-    # print(cur_ids, cur_type, cur_mask)
-    with torch.no_grad():
-        y_ = MODEL(cur_ids, token_type_ids=cur_type, attention_mask=cur_mask)
-        pred = y_.max(-1, keepdim=True)[1]  # 取最大值
-        cur_pre = LABEL_DICT[int(pred[0][0].cuda().data.cpu().numpy())]  # 预测的情绪
-    return cur_pre
+#  批量进行情感分析 返回情感极性结果
+def predict(sentences, MODEL, DEVICE):
+    if type(sentences) == str:
+        sentences = [sentences]
+    dataloader = genDataLoaderFromList(sentences)
+
+    preds = []
+
+    for batch in dataloader:
+        batch = {k: v.to(DEVICE) for k, v in batch.items()}
+        with torch.no_grad():
+            y_ = MODEL(**batch)
+            pred = torch.argmax(y_, dim=1)
+            preds.extend(pred.tolist())
+    return preds
+
+
+def predictWithLabel(sentence, MODEL, DEVICE):
+
+    preds = predict(sentence, MODEL, DEVICE)
+
+    labels = []
+
+    for pred in preds:
+        labels.append(LABEL_DICT[pred])
+
+    return labels
 
 
 #  利用sklearn计算模型的性能指标accuracy(准确率）、precision(精确率）、recall(召回率)、f1score(F1值)、auc
 def model_all_target_test():
     TOKENIZER, MODEL, DEVICE = load_model()
-    f = open('../data/three_sentiment_test.csv', 'r', encoding='utf-8')
-    data = pd.read_csv(f, sep="\t")
+    test_loader = genDataLoader(False)
     y_true = []
     y_pred = []
     y_score = []  # 概率值
-    record_num = data.shape[0]  # 返回行数
     #  遍历所有行
-    for i in range(record_num):
-        record = data.iloc[i, :]
-        y_true.append(record['label'])
-        ids = []
-        types = []
-        masks = []
-        cur_ids, cur_type, cur_mask = convert_text_to_token(TOKENIZER, record['review'], seq_length=SEQ_LENGTH)
-        ids.append(cur_ids)
-        types.append(cur_type)
-        masks.append(cur_mask)
-        cur_ids, cur_type, cur_mask = torch.LongTensor(np.array(ids)).to(DEVICE), torch.LongTensor(np.array(types)).to(
-            DEVICE), torch.LongTensor(np.array(masks)).to(DEVICE)  # 数据构造成tensor形式
+    for (x1, x2, x3, y) in tqdm(test_loader):
+        x1, x2, x3 = x1.to(DEVICE), x2.to(DEVICE), x3.to(DEVICE)
+        y_true.extend(y.to(DEVICE).tolist())
 
         with torch.no_grad():
-            y_ = MODEL(cur_ids, token_type_ids=cur_type, attention_mask=cur_mask)
+            y_ = MODEL(x1, token_type_ids=x2, attention_mask=x3)
             # probability = MODEL.forward(record['review'], token_type_ids=cur_type, attention_mask=cur_mask)  #计算得到概率值
-            pred = y_.max(-1, keepdim=True)[1]  # 取最大值
-            cur_pre = int(pred[0][0].cuda().data.cpu().numpy())  # 预测的情绪
-        y_pred.append(cur_pre)
+            pred = torch.argmax(y_, dim=1)  # 预测的标签
+        y_pred.extend(pred.tolist())
         # y_score.append(probability)
 
     accuracy = metrics.accuracy_score(y_true, y_pred)
-    precision = metrics.precision_score(y_true, y_pred, average='micro')
-    recall = metrics.recall_score(y_true, y_pred, average='micro')
-    f1score = metrics.f1_score(y_true, y_pred, average='micro')
+    precision = metrics.precision_score(y_true, y_pred, average='macro')
+    recall = metrics.recall_score(y_true, y_pred, average='macro')
+    f1score = metrics.f1_score(y_true, y_pred, average='macro')
     # fpr, tpr, thresholds = metrics.roc_curve(y_true, y_score, pos_label=1)
     # auc = metrics.auc(fpr, tpr)
     # return accuracy, precision, recall, f1score, auc
@@ -136,19 +119,19 @@ def polarity_analyze(workId, country, platform, post_time, TOKENIZER, MODEL, DEV
         # print("没有评论")
         return
     comments = comments["translated"].tolist()  # 获取查询到的评论列表
+    preds = predict(comments, MODEL, DEVICE)
     positive = 0
     negative = 0
     neutrality = 0
-    for comment in comments:
-        if comment.strip() == 0:
-            continue
-        res = predictSingle(comment, TOKENIZER, MODEL, DEVICE)
-        if res == "积极":
+    for pred in preds:
+        if pred == 2:
             positive += 1
-        elif res == "消极":
+        elif pred == 0:
             negative += 1
-        elif res == "中立":
+        elif pred == 1:
             neutrality += 1
+
+    # print(positive, negative, neutrality)
 
     cursor = conn.cursor()
     cursor.execute(query_polarity_sql.format(workId, country, platform, post_time))
@@ -165,14 +148,21 @@ def polarity_analyze(workId, country, platform, post_time, TOKENIZER, MODEL, DEV
 
 def my_test():
     TOKENIZER, MODEL, DEVICE = load_model()
-    polarity = predictSingle('我觉得这一般啊，', TOKENIZER, MODEL, DEVICE)
+    polarity = predictWithLabel(['好精致的！特别适合妹妹！', "变身国企~~~店大欺客~~~珍爱生命~~~远离蒙牛~~~"], MODEL, DEVICE)
     print(polarity)
 
 
 if __name__ == '__main__':
     my_test()
-    # model_all_target_test()
+
+    # start_time = time.time()
+    # polarity_analyze_by_workId(225)
+    # print(time.time() - start_time)
+
     # accuracy, precision, recall, f1score, auc = model_all_target_test()
+
     # accuracy, precision, recall, f1score = model_all_target_test()
-    # print(accuracy, precision, recall, f1score)
+    # print(f"accuracy: {accuracy*100:.4f} "
+    #       f"| precision: {precision*100:.4f} "
+    #       f"| recall: {recall*100:.4f} | F1: {f1score*100:.4f}")
     pass
